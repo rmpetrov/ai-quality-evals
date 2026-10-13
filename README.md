@@ -3,18 +3,20 @@
 A compact Python framework for evaluating retrieval quality and stored response traces.
 Phase 1 executes real BM25 retrieval, validates evaluation data, checks citation IDs and
 exact evidence quotations, and writes auditable JSON reports with explicit regression gates.
-Evaluation runs entirely offline and deterministically.
+Phase 2 adds an explicitly authorized live RAG path using the optional OpenAI SDK.
+Retrieval and replay evaluation remain offline and deterministic.
 
 The fictional product under test is **JuniperVale Benefits**, an employee-benefits platform.
 All policies, questions, answers, and traces were authored for this project. They contain
 no customer records, employer-system exports, or real benefit guidance.
 
-**There is no LLM integration in Phase 1.** Response replays are synthetic fixtures used
-to verify the evaluator. Their scores do not measure a live model.
+**Synthetic fixtures are evaluator tests, not live model results.** Actual provider responses
+are stored separately as `live_capture` records. No paid provider calls were performed
+during Phase 2 implementation or verification.
 
 ## Quick start
 
-Python **3.13** is the local and CI baseline. The runtime has no third-party dependencies.
+Python **3.13** is the local and CI baseline. The offline runtime has no third-party dependencies.
 pytest, Ruff, and mypy are the development tools; setuptools builds the package.
 The lock file pins their transitive dependencies for the Linux/macOS baseline.
 
@@ -31,6 +33,7 @@ ruff check .
 mypy
 python -m pytest -q
 python scripts/check_offline.py
+python scripts/check_captures_offline.py
 ```
 
 This builds a regular wheel containing the corpus and fixtures. Default inputs work from
@@ -42,25 +45,29 @@ runtime evaluation requires no network access.
 
 ```mermaid
 flowchart LR
-    KB[Synthetic Markdown policies] --> Loader[Strict corpus loader]
-    Cases[Gold evaluation cases] --> Validate[Dataset validation]
-    Loader --> Validate
-    Loader --> BM25[BM25 index]
-    Cases --> Query[Question text only]
-    Query --> BM25
-    BM25 --> Rank[Real ranked retrieval]
-    Fixtures[Synthetic stored traces] --> Replay[Replay validation]
-    Validate --> Eval[Deterministic evaluators]
-    Rank --> Eval
+    KB[Markdown corpus] --> BM25[Real BM25 retrieval]
+    Cases[Evaluation cases] --> Q[Question only]
+    Q --> BM25
+    BM25 --> Raw[Raw ranked hits]
+    Raw --> Policy[Exclude archived hits without refill]
+    Policy --> Context[Exact current document context]
+    Context --> Prompt[Versioned prompt and response schema]
+    Q --> Prompt
+    Prompt --> Live[Explicit opt-in OpenAI Responses API]
+    Live --> Capture[Private v2 capture including failures]
+    Capture --> Replay[Offline replay validation]
+    Fixtures[Clearly marked synthetic fixtures] --> Replay
+    Raw --> Eval[Deterministic evaluators]
     Replay --> Eval
-    Loader --> Eval
-    Eval --> Report[Per-case evidence and aggregate JSON]
-    Report --> Gate[Explicit thresholds and exit code]
+    Cases --> Eval
+    Eval --> Report[Per-case report and explicit gates]
+    Report --> Human[Separate human review]
 ```
 
 Retrieval mode executes the algorithm and does not produce an answer. Replay mode
-evaluates stored rankings and synthetic response records; it runs neither retrieval nor
-generation. Gold labels are used by validation and evaluation only. The retriever accepts
+evaluates stored rankings and synthetic or captured response records; it runs neither
+retrieval nor generation. Live mode performs retrieval, filters context, calls the model,
+saves each trace, then invokes the same offline evaluator. Gold labels are used by validation and evaluation only. The retriever accepts
 documents and question text, never relevant IDs, reference facts, gold evidence, or intent.
 
 | File or directory | Responsibility |
@@ -70,7 +77,12 @@ documents and question text, never relevant IDs, reference facts, gold evidence,
 | `src/ai_quality_evals/retrieval.py` | BM25 indexing and ranking |
 | `src/ai_quality_evals/metrics.py` | Independent evaluators, aggregation, and thresholds |
 | `src/ai_quality_evals/runner.py` | Orchestration, input hashes, atomic reports |
-| `src/ai_quality_evals/cli.py` | `validate`, `retrieval`, and `replay` commands |
+| `src/ai_quality_evals/cli.py` | Offline commands and guarded `live` command |
+| `src/ai_quality_evals/prompt.py` | One versioned prompt, strict response schema, archived exclusion |
+| `src/ai_quality_evals/provider.py` | Typed provider interface and lazy official OpenAI SDK adapter |
+| `src/ai_quality_evals/capture.py` | Strict v2 trace validation and provenance verification |
+| `src/ai_quality_evals/live.py` | Bounded sequential RAG requests and durable per-request captures |
+| `tests/fixtures/captured-format.jsonl` | Simulated v2 records; never live benchmark data |
 | `src/ai_quality_evals/data/kb/` | 12 current and two archived policies |
 | `src/ai_quality_evals/data/cases.jsonl` | Human-authored cases, labels, and evidence |
 | `src/ai_quality_evals/data/replays/` | Six good and six defective synthetic traces |
@@ -172,8 +184,10 @@ have null retrieval metrics and remain in the report. Retrieval mode has null re
 metrics. Aggregates include denominators and category breakdowns. Combine coverage and
 validity gates so omitted citations/quotes cannot conceal defects.
 
-Citation audit fields also show whether a source was retrieved and whether it is archived;
-these are diagnostics, not extra aggregate quality claims. Invalid cited IDs and invented
+Citation audit fields show raw retrieval membership and source status. For v2 captures,
+additional checks compare citations and quotes to the actual generation context and check
+current policy metadata. These remain structural checks; definitions and denominators
+are in [the live RAG technical guide](docs/live-rag.md). Invalid cited IDs and invented
 quotations pass structural parsing so evaluators can flag prediction defects. Schema
 integrity is enforced before evaluation, rather than averaged into a quality score.
 
@@ -216,10 +230,10 @@ configured gate, even for a minimum of zero.
 | --- | --- |
 | `0` | Valid execution; configured minimums met, or no minimums requested |
 | `1` | Configured gate failed; full diagnostic report written |
-| `2` | Invalid input/configuration, usage error, or file-system error |
+| `2` | Invalid input/configuration, usage/file-system error, or captured provider/generation failure |
 
 Replays intentionally cover subsets. Reports identify dataset/evaluated counts and every
-omitted case ID. Each trace requires `schema_version`, `case_id`, and
+omitted case ID. Phase 1 traces require `schema_version: 1`, `case_id`, and
 `trace_origin: "synthetic_fixture"`, plus these nested records:
 
 ```json
@@ -280,9 +294,9 @@ A failed report excerpt:
 
 Full reports include input SHA-256 hashes, evaluator version, retrieval configuration,
 questions, gold facts/sources/quotes, ranked hits/scores, response text, citation checks,
-quotation failure reasons, denominators, category summaries, and omitted cases. There are
-no timestamps or absolute input paths; identical inputs/configuration produce byte-identical
-JSON. Report replacement is atomic.
+quotation failure reasons, denominators, category summaries, and omitted cases. Reports add no replay timestamps or absolute input paths; identical inputs/configuration
+produce byte-identical JSON. V2 reports preserve captured latency, usage, model metadata,
+context and provider errors as recorded facts. Report replacement is atomic.
 
 Both commands below demonstrate meaningful failures and exit **1**:
 
@@ -303,16 +317,26 @@ reports, and serialization across Python hash seeds. A test disables socket crea
 both modes. A false answer with a real citation and exact quote explicitly demonstrates
 the limits of structural checks.
 
-GitHub Actions installs the pinned environment and package on Python 3.13, runs Ruff,
-strict mypy, pytest, and the smoke script. Smoke checks require both passing gates and
+The GitHub Actions `quality` job installs the pinned offline environment and package on
+Python 3.13, runs Ruff, strict mypy, pytest, and both offline smoke scripts. Smoke checks
+require both passing gates and
 expected exit-1 failures, plus an observation-only defective replay with `passed: null`;
-unexpected gate status, success, or an input-error exit fails CI. JSON artifacts
-are uploaded even after failures. Actions are pinned to commit SHAs. No API keys or paid
-inference calls are used. Initial package installation and artifact upload use network;
-the evaluations do not.
+unexpected gate status, success, or an input-error exit fails CI. An additional smoke check
+replays simulated v2 captures and checks live CLI failures with the key removed. Only explicitly
+named offline diagnostic reports are uploaded; live captures and reports are excluded.
+
+A separate `sdk-contract` job installs `requirements-live.lock` and the local package on
+Python 3.13, then runs `scripts/check_sdk_offline.py`. It exercises the official SDK using
+only local HTTPX2 MockTransport responses and blocked sockets during requests. The script
+supplies a dummy credential; no API key secret or external model-provider request is needed.
+Assertions fail the job if SDK compatibility or response parsing regresses. Actions remain
+pinned to commit SHAs. Initial package installation and artifact upload use network;
+evaluations and SDK contract requests do not. The updated workflow has been verified locally;
+GitHub-hosted execution is pending.
 
 Reports, virtual environments, caches, build outputs, and `.env` files are Git-ignored.
-Synthetic source data and replays are intentionally versioned. See the
+The `live-captures/` directory is also ignored. Synthetic source data and clearly marked
+simulated v2 fixtures are intentionally versioned. See the
 [Phase 1 verification report](docs/phase1-report.md) for the verified outcome.
 
 ## Scope and limitations
@@ -326,15 +350,80 @@ Synthetic source data and replays are intentionally versioned. See the
   it. Neither metric detects all hallucinations or measures semantic faithfulness.
 - Answerability accuracy checks a declared outcome, not free-form answer correctness.
   Reference facts are reviewer annotations, not a semantic grader.
-- Replays validate evaluator behavior; no live retrieval/generation pipeline produced their
-  synthetic response records.
-- No model API, LLM-as-a-Judge, chatbot, agent workflow, vector store, database, server,
-  Docker setup, or cloud infrastructure is implemented.
+- Synthetic replays validate evaluator behavior; they were not produced by a live model.
+  Actual captured outputs can be replayed offline without calling their provider.
+- There is one optional model API integration. No LLM-as-a-Judge, chatbot, agent workflow,
+  vector store, database, server, scheduled paid evaluations, or cloud infrastructure is included.
 
-## Planned next phase
+## Explicit live generation and offline replay
 
-Phase 2 should add a small real RAG integration with opt-in live model calls, explicit cost
-controls, and captured model/configuration/context/response provenance. Preserve this
-offline suite as the evaluator regression layer, and report live model performance
-separately. Add independently reviewed answer-quality labels and more difficult retrieval
-cases before proposing production gates. Agent tool-call evaluation remains later work.
+Install the optional official SDK (pinned to OpenAI Python 3.29.0):
+
+```bash
+python -m pip install '.[live]'
+```
+
+For pinned transitive SDK dependencies, install `requirements-live.lock` first. This optional
+lock is separate from the offline development lock and is installed by the `sdk-contract`
+CI job. Locally, `python scripts/check_sdk_offline.py` runs the same official-SDK check
+with a local mock HTTP transport and disabled sockets; it performs no live model calls.
+
+Supply `OPENAI_API_KEY` through your shell environment or secret manager. To avoid putting
+its value in shell history on bash/zsh, read it silently in an interactive shell:
+
+```bash
+read -s OPENAI_API_KEY
+export OPENAI_API_KEY
+```
+
+Enter the key at the prompt. Never paste it into source files, command arguments, reports,
+GitHub secrets for this offline workflow, or a committed `.env` file. The CLI fails clearly
+if the key or optional SDK is unavailable; it never substitutes a synthetic answer.
+
+Select an explicit model ID that your account can access and that supports the Responses
+API and strict Structured Outputs. No default model or automatic substitution is used.
+After separately authorizing paid execution, run a small batch:
+
+```bash
+ai-evals live --allow-live --model MODEL_ID --max-cases 3 \
+  --case case-02 --case case-17 --case case-21 \
+  --timeout 30 --max-output-tokens 800 \
+  --captures live-captures/my-reviewed-run/traces.jsonl
+```
+
+The CLI prints the intended request count before executing. Default maximum: three cases;
+hard maximum: 24. Explicit case selections must fit the limit. Calls are sequential,
+retries are disabled, output tokens are bounded to 16–4096, and the batch stops on its first
+provider/generation failure. A timeout can still leave provider-side processing or billing
+unknown. These limits do **not** guarantee a strict USD spending cap. Actual reported tokens
+are captured; missing usage stays null and no prices or dollar costs are invented.
+
+Actual traces and the automatic report stay inside Git-ignored `live-captures/`. The CLI
+requires this location for live artifacts and refuses existing output paths. Without
+`--captures`, it creates a unique run directory there. Every completed request or handled
+provider failure is flushed to disk before moving to the next case. Provider failures,
+refusals, incomplete responses and malformed outputs are recorded with a null parsed
+response; they are never counted as model abstentions.
+
+Replay a captured file without a key, SDK or model request:
+
+```bash
+unset OPENAI_API_KEY
+ai-evals validate --traces live-captures/my-reviewed-run/traces.jsonl
+ai-evals replay --traces live-captures/my-reviewed-run/traces.jsonl \
+  --minimum generation_success_rate=1 --minimum citation_in_context=1 \
+  --minimum context_quote_validity=1 --minimum current_citation_rate=1 \
+  --output live-captures/my-reviewed-run/replay.json
+```
+
+Replay checks original corpus/dataset hashes, exact context snapshots, prompt hashes and
+raw/parsed response agreement. Use the original inputs via `--kb`/`--cases` if they differ
+from the bundled dataset. A captured request is not reissued and its latency/usage is not
+recomputed. Use `--top-k` at or below captured retrieval K; changing evaluation K does not
+change the historical generation context.
+
+The technical [live RAG guide](docs/live-rag.md), [human review rubric](docs/human-review.md),
+and [Phase 2 verification report](docs/phase2-report.md) describe provenance, metric
+limitations, and verification status. Human scores remain null until supplied by a reviewer.
+A substantively wrong answer can pass every structural check; passing gates is not proof
+of correctness or hallucination-free generation.

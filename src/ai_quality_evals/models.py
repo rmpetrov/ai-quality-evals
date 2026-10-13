@@ -63,3 +63,88 @@ class EvaluationRecord:
     trace_origin: Literal["synthetic_fixture"]
     retrieval: RetrievalResult
     response: ResponseTrace
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationSettings:
+    model: str
+    timeout_seconds: float = 30.0
+    max_output_tokens: int = 800
+    max_retries: Literal[0] = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ExcludedSource:
+    document: Document
+    reason: Literal["archived_policy"] = "archived_policy"
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationContext:
+    policy: Literal["exclude_archived_v1"]
+    documents: tuple[Document, ...]
+    excluded: tuple[ExcludedSource, ...]
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class PromptSnapshot:
+    version: str
+    sha256: str
+    instructions: str
+    input_text: str
+    response_schema: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationRequest:
+    settings: GenerationSettings
+    prompt: PromptSnapshot
+
+
+@dataclass(frozen=True, slots=True)
+class TokenUsage:
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+
+
+type GenerationStatus = Literal["completed", "incomplete", "refusal", "error", "malformed"]
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderError:
+    kind: str
+    message: str
+    code: str | None = None
+    status_code: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderResult:
+    status: GenerationStatus
+    output_text: str | None
+    response_id: str | None
+    request_id: str | None
+    returned_model: str | None
+    usage: TokenUsage | None
+    latency_ms: float
+    error: ProviderError | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedRecord:
+    schema_version: Literal[2]
+    case_id: str
+    trace_origin: Literal["synthetic_fixture", "live_capture"]
+    execution: Literal["simulated", "live"]
+    provider: str
+    question: str
+    retrieval: RetrievalResult
+    context: GenerationContext
+    prompt: PromptSnapshot
+    settings: GenerationSettings
+    generation: ProviderResult
+    response: ResponseTrace | None
+    corpus_sha256: str
+    dataset_sha256: str

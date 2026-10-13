@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from ai_quality_evals.models import (
+    CapturedRecord,
     Category,
     Document,
     EvaluationCase,
@@ -95,6 +96,14 @@ def _reject_constant(value: str) -> object:
     raise ValidationError(f"nonfinite JSON constant: {value}")
 
 
+def parse_json(raw: str) -> object:
+    """Reject duplicate keys and nonfinite numbers in provider and recorded JSON alike."""
+    try:
+        return json.loads(raw, object_pairs_hook=_unique_pairs, parse_constant=_reject_constant)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+
+
 def read_jsonl(path: Path) -> list[object]:
     lines = path.read_text(encoding="utf-8").splitlines()
     if not lines:
@@ -102,9 +111,7 @@ def read_jsonl(path: Path) -> list[object]:
     result: list[object] = []
     for number, line in enumerate(lines, 1):
         try:
-            result.append(
-                json.loads(line, object_pairs_hook=_unique_pairs, parse_constant=_reject_constant)
-            )
+            result.append(parse_json(line))
         except (ValueError, ValidationError) as exc:
             raise ValidationError(f"{path}:{number}: {exc}") from exc
     return result
@@ -227,7 +234,11 @@ def load_cases(path: Path, documents: Mapping[str, Document]) -> tuple[Evaluatio
 
 def parse_record(
     value: object, cases: Mapping[str, EvaluationCase], documents: Mapping[str, Document]
-) -> EvaluationRecord:
+) -> EvaluationRecord | CapturedRecord:
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        from ai_quality_evals.capture import parse_capture
+
+        return parse_capture(value, cases, documents)
     obj = object_fields(
         value, {"schema_version", "case_id", "trace_origin", "retrieval", "response"}
     )
@@ -238,10 +249,24 @@ def parse_record(
     case_id = text(obj["case_id"], identifier=True)
     if case_id not in cases:
         raise ValidationError(f"unknown trace case ID: {case_id}")
-    retrieval = object_fields(obj["retrieval"], {"query", "top_k", "hits"})
+    retrieval = parse_retrieval(obj["retrieval"], cases[case_id].question, documents)
+    response = parse_response(obj["response"])
+    return EvaluationRecord(
+        1,
+        case_id,
+        "synthetic_fixture",
+        retrieval,
+        response,
+    )
+
+
+def parse_retrieval(
+    value: object, question: str, documents: Mapping[str, Document]
+) -> RetrievalResult:
+    retrieval = object_fields(value, {"query", "top_k", "hits"})
     query = text(retrieval["query"])
-    if query != cases[case_id].question:
-        raise ValidationError(f"trace query differs from case question: {case_id}")
+    if query != question:
+        raise ValidationError("trace query differs from case question")
     top_k = positive_int(retrieval["top_k"])
     hits: list[RetrievalHit] = []
     for item in array(retrieval["hits"]):
@@ -263,36 +288,34 @@ def parse_record(
         raise ValidationError("retrieval hits exceed top_k or contain duplicate IDs")
     if any(left.score < right.score for left, right in zip(hits, hits[1:], strict=False)):
         raise ValidationError("retrieval scores must be in nonincreasing rank order")
-    response = object_fields(obj["response"], {"outcome", "text", "citations", "evidence"})
+    return RetrievalResult(query, top_k, tuple(hits))
+
+
+def parse_response(value: object) -> ResponseTrace:
+    response = object_fields(value, {"outcome", "text", "citations", "evidence"})
     outcome = text(response["outcome"])
     if outcome not in {"answer", "abstain"}:
         raise ValidationError("outcome must be answer or abstain")
-    return EvaluationRecord(
-        1,
-        case_id,
-        "synthetic_fixture",
-        RetrievalResult(query, top_k, tuple(hits)),
-        ResponseTrace(
-            cast(Outcome, outcome),
-            text(response["text"]),
-            strings(response["citations"], identifiers=True),
-            evidence(response["evidence"]),
-        ),
+    return ResponseTrace(
+        cast(Outcome, outcome),
+        text(response["text"]),
+        strings(response["citations"], identifiers=True),
+        evidence(response["evidence"]),
     )
 
 
 def load_records(
     path: Path, cases: tuple[EvaluationCase, ...], documents: Mapping[str, Document]
-) -> tuple[EvaluationRecord, ...]:
+) -> tuple[EvaluationRecord | CapturedRecord, ...]:
     case_map = {case.case_id: case for case in cases}
-    records: dict[str, EvaluationRecord] = {}
+    records: dict[str, EvaluationRecord | CapturedRecord] = {}
     for number, value in enumerate(read_jsonl(path), 1):
         try:
             record = parse_record(value, case_map, documents)
             if record.case_id in records:
                 raise ValidationError(f"duplicate trace case ID: {record.case_id}")
             records[record.case_id] = record
-        except ValidationError as exc:
+        except ValueError as exc:
             raise ValidationError(f"{path}:{number}: {exc}") from exc
     # Replays intentionally cover subsets; report evaluated and omitted IDs explicitly.
     return tuple(records.values())

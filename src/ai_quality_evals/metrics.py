@@ -8,18 +8,37 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from statistics import fmean
 
-from ai_quality_evals.models import Document, EvaluationCase, ResponseTrace, RetrievalResult
+from ai_quality_evals.models import (
+    CapturedRecord,
+    Document,
+    EvaluationCase,
+    ResponseTrace,
+    RetrievalResult,
+)
 
-METRIC_NAMES = frozenset(
+CONTEXT_METRIC_NAMES = frozenset(
     {
-        "recall_at_k",
-        "mrr",
-        "citation_validity",
-        "exact_quote_validity",
-        "answerability_accuracy",
-        "citation_coverage",
-        "evidence_coverage",
+        "citation_in_context",
+        "context_quote_validity",
+        "current_citation_rate",
+        "effective_context_coverage",
+        "generation_success_rate",
     }
+)
+
+METRIC_NAMES = (
+    frozenset(
+        {
+            "recall_at_k",
+            "mrr",
+            "citation_validity",
+            "exact_quote_validity",
+            "answerability_accuracy",
+            "citation_coverage",
+            "evidence_coverage",
+        }
+    )
+    | CONTEXT_METRIC_NAMES
 )
 
 
@@ -87,6 +106,34 @@ def validate_quotes(
 
 
 @dataclass(frozen=True, slots=True)
+class ContextEvaluation:
+    effective_context_coverage: float | None
+    citations: tuple[CitationCheck, ...]
+    quotations: tuple[QuoteCheck, ...]
+    generation_success: bool
+
+
+def evaluate_context(case: EvaluationCase, record: CapturedRecord) -> ContextEvaluation:
+    supplied = {doc.document_id: doc for doc in record.context.documents}
+    response = record.response
+    quotations = validate_quotes(response, supplied) if response else ()
+    return ContextEvaluation(
+        recall_at_k(tuple(supplied), case.relevant_document_ids, record.retrieval.top_k),
+        validate_citations(response.citations, supplied, tuple(supplied)) if response else (),
+        tuple(
+            QuoteCheck(
+                check.document_id,
+                check.quote,
+                check.valid,
+                "not_in_generation_context" if check.reason == "unknown_document" else check.reason,
+            )
+            for check in quotations
+        ),
+        record.generation.status == "completed",
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class CaseResult:
     case: EvaluationCase
     retrieval: RetrievalResult
@@ -96,6 +143,7 @@ class CaseResult:
     citations: tuple[CitationCheck, ...]
     quotations: tuple[QuoteCheck, ...]
     answerability_correct: bool | None
+    context_evaluation: ContextEvaluation | None = None
 
 
 def evaluate_case(
@@ -104,6 +152,7 @@ def evaluate_case(
     documents: Mapping[str, Document],
     k: int,
     response: ResponseTrace | None = None,
+    capture: CapturedRecord | None = None,
 ) -> CaseResult:
     if retrieval.query != case.question or retrieval.top_k < k:
         raise ValueError(
@@ -119,6 +168,7 @@ def evaluate_case(
         validate_citations(response.citations, documents, ranked_ids) if response else (),
         validate_quotes(response, documents) if response else (),
         (response.outcome == "answer") == case.answerable if response else None,
+        evaluate_context(case, capture) if capture else None,
     )
 
 
@@ -153,6 +203,30 @@ def aggregate(results: Sequence[CaseResult]) -> Aggregate:
         "citation_coverage": [bool(response.citations) for response in answered],
         "evidence_coverage": [bool(response.evidence) for response in answered],
     }
+    contexts = [
+        result.context_evaluation for result in results if result.context_evaluation is not None
+    ]
+    if contexts:
+        samples.update(
+            {
+                "citation_in_context": [check.valid for ctx in contexts for check in ctx.citations],
+                "context_quote_validity": [
+                    check.valid for ctx in contexts for check in ctx.quotations
+                ],
+                "current_citation_rate": [
+                    check.valid and check.source_status == "current"
+                    for result in results
+                    if result.context_evaluation is not None
+                    for check in result.citations
+                ],
+                "effective_context_coverage": [
+                    ctx.effective_context_coverage
+                    for ctx in contexts
+                    if ctx.effective_context_coverage is not None
+                ],
+                "generation_success_rate": [ctx.generation_success for ctx in contexts],
+            }
+        )
     return Aggregate(
         {name: fmean(values) if values else None for name, values in samples.items()},
         {name: len(values) for name, values in samples.items()},
@@ -177,7 +251,7 @@ def check_thresholds(
             raise ValueError(f"unknown threshold metric: {name}")
         if isinstance(minimum, bool) or not math.isfinite(minimum) or not 0 <= minimum <= 1:
             raise ValueError(f"minimum for {name} must be finite and within [0, 1]")
-        actual = values.metrics[name]
+        actual = values.metrics.get(name)
         if actual is None or actual < minimum:
             failures.append(
                 ThresholdFailure(
