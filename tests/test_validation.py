@@ -273,6 +273,7 @@ def test_quality_errors_are_not_swallowed_as_schema_errors(
     )
     case = parse_case(case_payload, documents)
     record = parse_record(trace_payload, {case.case_id: case}, documents)
+    assert record.response is not None
     assert record.response.citations == ("missing-document",)
 
 

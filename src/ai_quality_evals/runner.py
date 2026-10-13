@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from ai_quality_evals import __version__
+from ai_quality_evals.capture import corpus_hash, verify_input_hashes
 from ai_quality_evals.metrics import (
     Aggregate,
     CaseResult,
@@ -18,6 +19,7 @@ from ai_quality_evals.metrics import (
     check_thresholds,
     evaluate_case,
 )
+from ai_quality_evals.models import CapturedRecord
 from ai_quality_evals.retrieval import BM25Retriever
 from ai_quality_evals.validation import load_cases, load_corpus, load_records
 
@@ -29,7 +31,7 @@ class Report:
     schema_version: int
     evaluator_version: str
     mode: Literal["retrieval", "replay"]
-    response_origin: Literal["synthetic_fixture"] | None
+    response_origin: Literal["synthetic_fixture", "live_capture", "mixed"] | None
     evaluation_k: int
     retrieval_config: dict[str, str | float] | None
     input_sha256: dict[str, str | None]
@@ -40,6 +42,7 @@ class Report:
     by_category: dict[str, Aggregate]
     minimums: dict[str, float]
     threshold_failures: tuple[ThresholdFailure, ...]
+    captures: tuple[CapturedRecord, ...] = ()
 
     @property
     def gate_status(self) -> Literal["not_evaluated", "passed", "failed"]:
@@ -54,10 +57,7 @@ class Report:
 
 
 def _corpus_hash(directory: Path) -> str:
-    digest = hashlib.sha256()
-    for path in sorted(directory.glob("*.md")):
-        digest.update(path.name.encode("utf-8") + b"\0" + path.read_bytes() + b"\0")
-    return digest.hexdigest()
+    return corpus_hash(directory)
 
 
 def run_evaluation(
@@ -74,6 +74,8 @@ def run_evaluation(
     cases = load_cases(cases_path, documents)
     evaluated: list[CaseResult] = []
     config: dict[str, str | float] | None = None
+    captures: tuple[CapturedRecord, ...] = ()
+    origin: Literal["synthetic_fixture", "live_capture", "mixed"] | None = None
     if traces_path is None:
         retriever = BM25Retriever(documents.values())
         config = {
@@ -89,10 +91,21 @@ def run_evaluation(
     else:
         case_map = {case.case_id: case for case in cases}
         records = load_records(traces_path, cases, documents)
+        captures = tuple(record for record in records if isinstance(record, CapturedRecord))
+        origins = {record.trace_origin for record in records}
+        origin = "mixed" if len(origins) > 1 else records[0].trace_origin
         for record in records:
+            captured = record if isinstance(record, CapturedRecord) else None
+            if captured is not None:
+                verify_input_hashes(captured, kb, cases_path)
             evaluated.append(
                 evaluate_case(
-                    case_map[record.case_id], record.retrieval, documents, top_k, record.response
+                    case_map[record.case_id],
+                    record.retrieval,
+                    documents,
+                    top_k,
+                    record.response,
+                    captured,
                 )
             )
     # Stable case order for equivalent trace files; raw file hash still captures input order.
@@ -101,10 +114,10 @@ def run_evaluation(
     thresholds = dict(minimums or {})
     evaluated_ids = {result.case.case_id for result in results}
     return Report(
-        1,
+        2 if captures else 1,
         __version__,
         "retrieval" if traces_path is None else "replay",
-        None if traces_path is None else "synthetic_fixture",
+        origin,
         top_k,
         config,
         {
@@ -122,11 +135,25 @@ def run_evaluation(
         },
         thresholds,
         check_thresholds(summary, thresholds),
+        tuple(sorted(captures, key=lambda record: record.case_id)),
     )
 
 
 def report_json(report: Report) -> str:
     payload = asdict(report)
+    if report.captures:
+        payload["human_review"] = None
+        payload["measurement_limits"] = (
+            "Citation existence, context membership, current-policy metadata and exact quotations "
+            "do not establish semantic faithfulness, factual correctness "
+            "or absence of hallucinations. "
+            "Human review is required; all human scores are unreviewed."
+        )
+    else:
+        # Preserve Phase 1 report fields and metric sets; v2 additions are opt-in by input format.
+        del payload["captures"]
+        for result in payload["results"]:
+            del result["context_evaluation"]
     payload["gate_status"] = report.gate_status
     payload["passed"] = report.passed
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n"

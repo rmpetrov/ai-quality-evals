@@ -76,3 +76,14 @@ def trace_payload() -> dict[str, object]:
             "evidence": [{"document_id": "policy-a", "quote": "Enrollment closes on November 20."}],
         },
     }
+
+
+@pytest.fixture(autouse=True)
+def forbid_provider_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test is offline, even on a developer machine with a configured API key."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    def forbidden_socket(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Automated tests must not open network connections")
+
+    monkeypatch.setattr("socket.socket", forbidden_socket)
