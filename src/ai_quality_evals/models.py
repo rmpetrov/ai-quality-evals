@@ -104,9 +104,11 @@ class GenerationRequest:
 
 @dataclass(frozen=True, slots=True)
 class TokenUsage:
-    input_tokens: int
-    output_tokens: int
-    total_tokens: int
+    """Reported counts; Ollama may omit individual counts (validated per provider)."""
+
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
 
 
 type GenerationStatus = Literal["completed", "incomplete", "refusal", "error", "malformed"]

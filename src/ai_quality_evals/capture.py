@@ -111,7 +111,7 @@ def _document(value: object) -> Document:
 type LiteralStatus = Literal["current", "archived"]
 
 
-def _generation(value: object) -> ProviderResult:
+def _generation(value: object, *, allow_partial_usage: bool = False) -> ProviderResult:
     obj = object_fields(
         value,
         {
@@ -133,7 +133,9 @@ def _generation(value: object) -> ProviderResult:
         counts = object_fields(obj["usage"], {"input_tokens", "output_tokens", "total_tokens"})
         usage = TokenUsage(
             *(
-                _nonnegative_int(counts[name])
+                None
+                if allow_partial_usage and counts[name] is None
+                else _nonnegative_int(counts[name])
                 for name in ("input_tokens", "output_tokens", "total_tokens")
             )
         )
@@ -193,8 +195,8 @@ def parse_capture(
             "trace origin and execution disagree; simulations are synthetic_fixture"
         )
     provider = text(obj["provider"])
-    if origin == "live_capture" and provider != "openai":
-        raise ValidationError("live captures require provider openai")
+    if origin == "live_capture" and provider not in {"openai", "ollama"}:
+        raise ValidationError("live captures require provider openai or ollama")
     case_id = text(obj["case_id"], identifier=True)
     question = text(obj["question"])
     if cases is not None:
@@ -254,7 +256,7 @@ def parse_capture(
         positive_int(cfg["max_output_tokens"]),
     )
     validate_settings(settings)
-    generation = _generation(obj["generation"])
+    generation = _generation(obj["generation"], allow_partial_usage=provider == "ollama")
     response = None if obj["response"] is None else parse_response(obj["response"])
     if generation.status == "completed":
         if generation.output_text is None or response is None:

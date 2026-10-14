@@ -36,6 +36,7 @@ def _parser() -> argparse.ArgumentParser:
                 + ", ".join(sorted(METRIC_NAMES)),
             )
         if command == "live":
+            sub.add_argument("--provider", choices=("openai", "ollama"), default="openai")
             sub.add_argument("--allow-live", action="store_true")
             sub.add_argument("--model", required=True)
             sub.add_argument("--max-cases", type=int, default=3)
@@ -80,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         output = cast(Path | None, args.output)
         if command == "live":
             from ai_quality_evals.live import require_private_path, run_live_batch, select_cases
+            from ai_quality_evals.ollama import OllamaProvider, validate_local_model
             from ai_quality_evals.provider import OpenAIProvider
 
             if not cast(bool, args.allow_live):
@@ -88,10 +90,13 @@ def main(argv: list[str] | None = None) -> int:
                 cast(str, args.model), cast(float, args.timeout), cast(int, args.max_output_tokens)
             )
             validate_settings(settings)
+            provider_name = cast(str, args.provider)
+            if provider_name == "ollama":
+                validate_local_model(settings.model)
             if cast(int, args.top_k) < 1:
                 raise ValueError("top_k must be a positive integer")
             minimums = _minimums(cast(list[str], args.minimum))
-            check_thresholds(aggregate([]), minimums)  # Validate before any paid requests.
+            check_thresholds(aggregate([]), minimums)  # Validate before any provider requests.
             selected = select_cases(
                 load_cases(cases_path, load_corpus(kb)),
                 cast(list[str], args.case_ids),
@@ -109,10 +114,14 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"Intended requests: {len(selected)} sequential; model={settings.model}; "
                 f"max_output_tokens={settings.max_output_tokens}; retries=0. "
-                "Request/token limits do not guarantee a strict USD spending cap.",
+                + (
+                    "Local Ollama only at 127.0.0.1:11434; no cloud fallback."
+                    if provider_name == "ollama"
+                    else "Request/token limits do not guarantee a strict USD spending cap."
+                ),
                 flush=True,
             )
-            provider = OpenAIProvider()
+            provider = OllamaProvider() if provider_name == "ollama" else OpenAIProvider()
             try:
                 records = run_live_batch(
                     provider,
@@ -130,10 +139,16 @@ def main(argv: list[str] | None = None) -> int:
             known_usage = [
                 record.generation.usage for record in records if record.generation.usage is not None
             ]
+            input_tokens = sum(
+                usage.input_tokens for usage in known_usage if usage.input_tokens is not None
+            )
+            output_tokens = sum(
+                usage.output_tokens for usage in known_usage if usage.output_tokens is not None
+            )
             print(
                 f"Captured requests: {len(records)}; usage reported for {len(known_usage)}; "
-                f"known input tokens={sum(usage.input_tokens for usage in known_usage)}; "
-                f"known output tokens={sum(usage.output_tokens for usage in known_usage)}. "
+                f"known input tokens={input_tokens}; "
+                f"known output tokens={output_tokens}. "
                 "Missing usage is unknown; USD cost is not calculated."
             )
         report = run_evaluation(
