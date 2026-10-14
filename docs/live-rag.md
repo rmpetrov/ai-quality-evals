@@ -3,6 +3,8 @@
 Phase 2 extends the existing standard-library evaluator with four small modules:
 `prompt.py`, `provider.py`, `capture.py`, and `live.py`. Phase 1 corpus, case labels,
 BM25 ranking, deterministic metric definitions and offline commands remain intact.
+The optional native `ollama.py` adapter reuses these contracts; see the
+[local setup and execution guide](local-ollama.md). The OpenAI path remains the default.
 
 ## Retrieval, generation and evaluation
 
@@ -102,7 +104,7 @@ Each JSONL line contains:
 | --- | --- |
 | `schema_version` | Integer 2; Phase 1 records remain integer 1 |
 | `case_id`, `question` | Selected dataset case and exact user question |
-| `trace_origin`, `execution`, `provider` | `live_capture`/`live`/`openai`, or explicitly `synthetic_fixture`/`simulated` for fakes |
+| `trace_origin`, `execution`, `provider` | `live_capture`/`live` with provider `openai` or `ollama`, or explicitly `synthetic_fixture`/`simulated` for fakes |
 | `retrieval` | Raw query, requested top-K and original ranked IDs/scores |
 | `context` | Policy version, exact supplied document text/metadata, excluded archived snapshots/reasons, canonical context text |
 | `prompt` | Version, hash, exact instructions, schema and serialized model input |
@@ -114,6 +116,9 @@ Each JSONL line contains:
 Usage is null when unavailable, never inferred from text or from configured limits. No
 pricing is captured or calculated. Returned model metadata may differ from the requested
 alias and is preserved. A response ID and HTTP request ID are different fields.
+Ollama preserves partially reported input/output token counts with null for missing counts
+and total; OpenAI retains the existing all-integer usage contract. Native Ollama response
+and request IDs remain null. Its latency includes the local model metadata check and chat.
 
 The raw model text is preserved except credential redaction. Failures without model text
 have null output. Partial output from incomplete responses is retained for diagnostics but
@@ -123,8 +128,8 @@ cannot capture that result; truncated or otherwise malformed JSONL is rejected o
 
 Actual captures are private artifacts under `live-captures/`, never bundled into the wheel
 or uploaded by CI. Test fixtures are under `tests/fixtures/`, expressly marked as simulated.
-An injected OpenAI transport is also marked simulated. No synthetic response is reported
-as a real-provider capture, and no fixture score is a live model benchmark.
+An injected OpenAI or Ollama transport is also marked simulated. No synthetic response is
+reported as a real-provider capture, and no fixture score is a live model benchmark.
 
 ## Validation and deterministic replay
 

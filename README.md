@@ -4,6 +4,7 @@ A compact Python framework for evaluating retrieval quality and stored response 
 Phase 1 executes real BM25 retrieval, validates evaluation data, checks citation IDs and
 exact evidence quotations, and writes auditable JSON reports with explicit regression gates.
 Phase 2 adds an explicitly authorized live RAG path using the optional OpenAI SDK.
+An optional native Ollama provider supports local RAG generation without paid API calls.
 Retrieval and replay evaluation remain offline and deterministic.
 
 The fictional product under test is **JuniperVale Benefits**, an employee-benefits platform.
@@ -54,7 +55,9 @@ flowchart LR
     Context --> Prompt[Versioned prompt and response schema]
     Q --> Prompt
     Prompt --> Live[Explicit opt-in OpenAI Responses API]
+    Prompt --> Local[Explicit opt-in local Ollama chat API]
     Live --> Capture[Private v2 capture including failures]
+    Local --> Capture
     Capture --> Replay[Offline replay validation]
     Fixtures[Clearly marked synthetic fixtures] --> Replay
     Raw --> Eval[Deterministic evaluators]
@@ -352,11 +355,27 @@ simulated v2 fixtures are intentionally versioned. See the
   Reference facts are reviewer annotations, not a semantic grader.
 - Synthetic replays validate evaluator behavior; they were not produced by a live model.
   Actual captured outputs can be replayed offline without calling their provider.
-- There is one optional model API integration. No LLM-as-a-Judge, chatbot, agent workflow,
-  vector store, database, server, scheduled paid evaluations, or cloud infrastructure is included.
+- Optional OpenAI and local Ollama integrations are explicit opt-ins. No LLM-as-a-Judge,
+  chatbot, agent workflow, vector store, database, server, scheduled paid evaluations,
+  or cloud infrastructure is included.
 
 ## Explicit live generation and offline replay
 
+For local inference on an Apple Silicon Mac, see the
+[Ollama setup and qwen2.5:3b example](docs/local-ollama.md). After manually installing the
+model and starting Ollama with cloud disabled, use:
+
+```bash
+ai-evals live --provider ollama --allow-live --model qwen2.5:3b \
+  --max-cases 3 --timeout 120 --max-output-tokens 800 \
+  --captures live-captures/qwen-local-run/traces.jsonl
+```
+
+This path needs no API key or optional SDK, sends the existing prompt/schema to the native
+loopback API, and records real local inference as `live_capture`/`live` with provider
+`ollama`. Model downloads and inference never run automatically during verification or CI.
+
+The existing OpenAI path remains the default (`--provider openai` is optional).
 Install the optional official SDK (pinned to OpenAI Python 3.29.0):
 
 ```bash
