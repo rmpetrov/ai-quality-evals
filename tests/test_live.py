@@ -20,7 +20,7 @@ from ai_quality_evals.models import (
     ProviderResult,
     TokenUsage,
 )
-from ai_quality_evals.prompt import canonical_json
+from ai_quality_evals.prompt import PROMPT_INSTRUCTIONS, canonical_json, prompt_hash
 from ai_quality_evals.runner import DEFAULT_DATA, report_json, run_evaluation
 from ai_quality_evals.validation import ValidationError, load_cases, load_corpus, parse_json
 
@@ -128,32 +128,126 @@ def test_real_bm25_context_and_complete_provenance(tmp_path: Path) -> None:
     assert json.loads(report_json(report))["human_review"] is None
 
 
-def test_gold_annotations_never_change_generation_requests(tmp_path: Path) -> None:
+@pytest.mark.parametrize("prompt_version", tuple(PROMPT_INSTRUCTIONS))
+def test_gold_annotations_never_change_generation_requests(
+    tmp_path: Path, prompt_version: str
+) -> None:
     cases = [
         cast(dict[str, object], json.loads(line))
         for line in (DEFAULT_DATA / "cases.jsonl").read_text().splitlines()
     ]
     for case in cases:
+        case["case_id"] = "relabeled-" + str(case["case_id"])
+        case["category"] = "unanswerable"
+        case["answerable"] = False
+        case["relevant_document_ids"] = []
+        case["reference_evidence"] = []
         case["reference_facts"] = ["GOLD-SECRET-ANNOTATION"]
         case["intent"] = "GOLD-SECRET-INTENT"
     path = tmp_path / "cases.jsonl"
     path.write_text("".join(json.dumps(case) + "\n" for case in cases))
     first = ScriptedProvider([generated(answer())])
     second = ScriptedProvider([generated(answer())])
-    for provider, cases_path, name in [
-        (first, DEFAULT_DATA / "cases.jsonl", "a"),
-        (second, path, "b"),
+    for provider, cases_path, name, case_id in [
+        (first, DEFAULT_DATA / "cases.jsonl", "a", "case-02"),
+        (second, path, "b", "relabeled-case-02"),
     ]:
         run_live_batch(
             provider,
             settings=GenerationSettings("model"),
             captures_path=tmp_path / f"{name}.jsonl",
             cases_path=cases_path,
-            case_ids=["case-02"],
+            case_ids=[case_id],
             allow_live=True,
+            prompt_version=prompt_version,
         )
     assert first.requests == second.requests
-    assert "GOLD-SECRET" not in first.requests[0].prompt.input_text
+    serialized = canonical_json(first.requests[0].prompt.input_text)
+    assert "GOLD-SECRET" not in serialized
+    assert "case-02" not in serialized
+
+
+@pytest.mark.parametrize("prompt_version", tuple(PROMPT_INSTRUCTIONS))
+def test_selected_prompt_is_captured_and_replayed_without_outcome_repair(
+    tmp_path: Path, prompt_version: str
+) -> None:
+    inconsistent = answer()
+    inconsistent["outcome"] = "abstain"
+    raw = generated(inconsistent)
+    provider = ScriptedProvider([raw])
+    path = tmp_path / "selected.jsonl"
+    record = run_live_batch(
+        provider,
+        settings=GenerationSettings("model"),
+        captures_path=path,
+        allow_live=True,
+        case_ids=["case-02"],
+        prompt_version=prompt_version,
+    )[0]
+    assert record.prompt == provider.requests[0].prompt
+    assert record.prompt.version == prompt_version
+    assert record.prompt.instructions == PROMPT_INSTRUCTIONS[prompt_version]
+    assert record.generation == raw
+    assert record.response is not None
+    assert record.response.outcome == "abstain"
+    assert record.response.citations == ("eligibility",)
+    assert record.response.text == inconsistent["text"]
+    assert parse_capture(parse_json(path.read_text())) == record
+    report = run_evaluation(traces_path=path)
+    assert report.captures == (record,)
+    assert report.aggregate.metrics["answerability_accuracy"] == 0
+    assert report_json(report) == report_json(run_evaluation(traces_path=path))
+
+
+def test_unknown_prompt_version_sends_no_requests_and_creates_no_capture(tmp_path: Path) -> None:
+    provider = ScriptedProvider([])
+    path = tmp_path / "unknown.jsonl"
+    with pytest.raises(ValueError, match="unsupported prompt version"):
+        run_live_batch(
+            provider,
+            settings=GenerationSettings("model"),
+            captures_path=path,
+            allow_live=True,
+            prompt_version="benefits_rag_v999",
+        )
+    assert provider.requests == []
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("prompt_version", tuple(PROMPT_INSTRUCTIONS))
+@pytest.mark.parametrize(
+    "tampering", ["version", "mislabeled_version", "instructions", "response_schema"]
+)
+def test_rehashed_unrecognized_prompt_snapshot_is_rejected(
+    tmp_path: Path, prompt_version: str, tampering: str
+) -> None:
+    record = run_live_batch(
+        ScriptedProvider([generated(answer())]),
+        settings=GenerationSettings("model"),
+        captures_path=tmp_path / "prompt.jsonl",
+        allow_live=True,
+        max_cases=1,
+        prompt_version=prompt_version,
+    )[0]
+    payload = cast(dict[str, object], parse_json(capture_json(record)))
+    prompt = cast(dict[str, object], payload["prompt"])
+    if tampering == "version":
+        prompt["version"] = "benefits_rag_v999"
+    elif tampering == "mislabeled_version":
+        prompt["version"] = (
+            "benefits_rag_v2" if prompt_version == "benefits_rag_v1" else "benefits_rag_v1"
+        )
+    elif tampering == "instructions":
+        prompt["instructions"] = str(prompt["instructions"]) + "\nModified instructions."
+    else:
+        cast(dict[str, object], prompt["response_schema"])["description"] = "Modified schema."
+    prompt["sha256"] = prompt_hash(
+        cast(str, prompt["version"]),
+        cast(str, prompt["instructions"]),
+        cast(dict[str, object], prompt["response_schema"]),
+    )
+    with pytest.raises(ValidationError, match="unsupported prompt"):
+        parse_capture(payload)
 
 
 @pytest.mark.parametrize("case_id", ["case-16", "case-17"])
@@ -458,10 +552,12 @@ def test_cli_model_must_be_explicit() -> None:
     assert exc.value.code == 2
 
 
+@pytest.mark.parametrize("prompt_version", [None, "benefits_rag_v1", "benefits_rag_v2"])
 def test_live_cli_uses_fake_provider_and_reports_usage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    prompt_version: str | None,
 ) -> None:
     provider = ScriptedProvider([generated(answer(), usage=None)])
     monkeypatch.setattr("ai_quality_evals.provider.OpenAIProvider", lambda: provider)
@@ -481,18 +577,47 @@ def test_live_cli_uses_fake_provider_and_reports_usage(
                 str(path),
                 "--minimum",
                 "generation_success_rate=1",
+                *(["--prompt-version", prompt_version] if prompt_version is not None else []),
             ]
         )
         == 0
     )
     assert len(provider.requests) == 1
+    selected_version = prompt_version or "benefits_rag_v1"
+    assert provider.requests[0].prompt.version == selected_version
     output = capsys.readouterr().out
+    assert f"prompt_version={selected_version}" in output
     assert "usage reported for 0" in output
     assert "Missing usage is unknown" in output
     assert (
         json.loads((path.parent / "report.json").read_text())["response_origin"]
         == "synthetic_fixture"
     )
+
+
+def test_cli_rejects_unknown_prompt_before_constructing_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden_provider() -> None:
+        raise AssertionError("Unknown prompt must fail before provider construction")
+
+    monkeypatch.setattr("ai_quality_evals.provider.OpenAIProvider", forbidden_provider)
+    path = tmp_path / "live-captures" / "unknown.jsonl"
+    with pytest.raises(SystemExit) as exc:
+        main(
+            [
+                "live",
+                "--allow-live",
+                "--model",
+                "model",
+                "--prompt-version",
+                "benefits_rag_v999",
+                "--captures",
+                str(path),
+            ]
+        )
+    assert exc.value.code == 2
+    assert not path.exists()
 
 
 def test_offline_replay_preserves_captured_facts_across_runs_and_hash_seeds(

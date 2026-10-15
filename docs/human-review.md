@@ -1,8 +1,9 @@
 # Human review rubric
 
-All generated reports begin with `human_review: null`. This means **unreviewed**, not zero,
+Existing replay reports retain `human_review: null`. This means **unreviewed**, not zero,
 pass or perfect. Deterministic metrics never create, infer or replace a reviewer score.
-Human ratings are not included in automated gates in Phase 2.
+Human ratings are not included in automated gates. Phase 3 stores them in separate,
+versioned semantic review reports; see the [offline workflow](semantic-evaluation.md).
 
 Review each parsed response against the question, the exact supplied current context,
 the independently authored reference facts and evidence, and the full corpus when diagnosing
@@ -25,15 +26,15 @@ can legitimately require abstention if retrieval omitted necessary sources. The 
 answerability metric cannot express that distinction. An abstention can earn 2 for this
 rubric while failing gold answerability accuracy.
 
-Record ratings separately from immutable raw captures. A suggested reviewer-owned record:
+Record ratings separately from immutable raw captures. Each case row in a version-1
+review set has this unscored form; preparation binds the set to the capture file hash:
 
 ```json
 {
-  "capture_sha256": "SHA-256 of the exact reviewed capture file",
   "case_id": "case-02",
-  "reviewer": "Reviewer identifier",
-  "reviewed_at": "Reviewer-supplied date/time",
-  "status": "reviewed",
+  "reviewer": null,
+  "reviewed_at": null,
+  "status": "unreviewed",
   "scores": {
     "answer_correctness": null,
     "groundedness": null,
@@ -41,12 +42,22 @@ Record ratings separately from immutable raw captures. A suggested reviewer-owne
     "appropriate_abstention": null,
     "citation_support": null
   },
-  "notes": "Populate ratings and supporting rationale after human inspection."
+  "justifications": {
+    "answer_correctness": null,
+    "groundedness": null,
+    "necessary_fact_coverage": null,
+    "appropriate_abstention": null,
+    "citation_support": null
+  },
+  "defect_labels": [],
+  "notes": null
 }
 ```
 
-This is a template, not a completed review or an auto-populated score record. A future
-review-ingestion feature could validate reviewer data; Phase 2 deliberately does not add
-one. Never present a fixture result or an unreviewed capture as an independently reviewed
+This is a template, not a completed review. After inspection, enter your actual identity
+and timezone-aware review timestamp, scores, and a justification for every dimension
+(including inapplicable ones), then mark the row `reviewed`. The offline CLI validates
+the annotation contract without inferring any ratings. Never present a fixture result
+or an unreviewed capture as an independently reviewed
 model benchmark. The “200 hours” counterexample in `test_live.py` shows why passing
 structural checks alone is insufficient.

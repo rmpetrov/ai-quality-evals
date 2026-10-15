@@ -10,7 +10,8 @@ from uuid import uuid4
 from ai_quality_evals.capture import verify_input_hashes
 from ai_quality_evals.metrics import METRIC_NAMES, aggregate, check_thresholds
 from ai_quality_evals.models import CapturedRecord, GenerationSettings
-from ai_quality_evals.prompt import validate_settings
+from ai_quality_evals.prompt import PROMPT_INSTRUCTIONS, PROMPT_VERSION, validate_settings
+from ai_quality_evals.review_cli import add_review_commands, run_review_command
 from ai_quality_evals.runner import DEFAULT_DATA, run_evaluation, write_report
 from ai_quality_evals.validation import load_cases, load_corpus, load_records
 
@@ -39,12 +40,21 @@ def _parser() -> argparse.ArgumentParser:
             sub.add_argument("--provider", choices=("openai", "ollama"), default="openai")
             sub.add_argument("--allow-live", action="store_true")
             sub.add_argument("--model", required=True)
+            sub.add_argument(
+                "--prompt-version",
+                choices=tuple(PROMPT_INSTRUCTIONS),
+                default=PROMPT_VERSION,
+                help="immutable prompt template (default: %(default)s)",
+            )
             sub.add_argument("--max-cases", type=int, default=3)
             sub.add_argument("--case", action="append", default=[], dest="case_ids")
             sub.add_argument("--timeout", type=float, default=30.0)
             sub.add_argument("--max-output-tokens", type=int, default=800)
             sub.add_argument("--captures", type=Path)
             sub.set_defaults(output=None)
+    add_review_commands(
+        subparsers.add_parser("review", help="offline consistency and human review")
+    )
     return parser
 
 
@@ -66,6 +76,8 @@ def main(argv: list[str] | None = None) -> int:
     cases_path = cast(Path, args.cases)
     traces = cast(Path | None, getattr(args, "traces", None))
     try:
+        if command == "review":
+            return run_review_command(args)
         if command == "validate":
             documents = load_corpus(kb)
             cases = load_cases(cases_path, documents)
@@ -113,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("capture/report paths must be distinct and must not already exist")
             print(
                 f"Intended requests: {len(selected)} sequential; model={settings.model}; "
+                f"prompt_version={args.prompt_version}; "
                 f"max_output_tokens={settings.max_output_tokens}; retries=0. "
                 + (
                     "Local Ollama only at 127.0.0.1:11434; no cloud fallback."
@@ -133,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
                     case_ids=[case.case_id for case in selected],
                     max_cases=cast(int, args.max_cases),
                     top_k=cast(int, args.top_k),
+                    prompt_version=cast(str, args.prompt_version),
                 )
             finally:
                 provider.close()

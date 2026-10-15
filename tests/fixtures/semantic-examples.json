@@ -1,0 +1,148 @@
+{
+  "fixture_origin": "synthetic_fixture",
+  "annotation_origin": "synthetic_fixture",
+  "description": "Authored regression examples and expected annotations, not real generations or independent human benchmark reviews.",
+  "examples": [
+    {
+      "example_id": "source-contradiction",
+      "case_id": "case-18",
+      "response": {
+        "outcome": "answer",
+        "text": "The dental annual maximum and medical deductible are the same rule.",
+        "citations": ["dental-limits", "medical-limits"],
+        "evidence": [
+          {"document_id": "dental-limits", "quote": "The dental annual maximum is separate from the medical deductible and medical out-of-pocket limit."},
+          {"document_id": "medical-limits", "quote": "The medical plan has a $1,500 individual annual deductible for in-network care."}
+        ]
+      },
+      "expected_rules": [],
+      "scores": {"answer_correctness": 0, "groundedness": 0, "necessary_fact_coverage": 0, "appropriate_abstention": 2, "citation_support": 0},
+      "justifications": {
+        "answer_correctness": "The answer equates limits that the source explicitly separates.",
+        "groundedness": "The central claim contradicts the supplied dental source.",
+        "necessary_fact_coverage": "The required distinction is reversed rather than supplied.",
+        "appropriate_abstention": "Current documents suffice to answer this general policy question.",
+        "citation_support": "Exact, correctly attributed quotes still contradict the conclusion."
+      },
+      "defect_labels": ["evidence_contradiction"]
+    },
+    {
+      "example_id": "unsupported-personal-claim",
+      "case_id": "case-22",
+      "response": {
+        "outcome": "answer",
+        "text": "Your reimbursement claim was paid today.",
+        "citations": ["claim-status"],
+        "evidence": [{"document_id": "claim-status", "quote": "Paid means reimbursement has been issued."}]
+      },
+      "expected_rules": [],
+      "scores": {"answer_correctness": 0, "groundedness": 0, "necessary_fact_coverage": 0, "appropriate_abstention": 0, "citation_support": 0},
+      "justifications": {
+        "answer_correctness": "The individual's payment status is unavailable; asserting payment is misleading.",
+        "groundedness": "A status definition supplies no personal payment record.",
+        "necessary_fact_coverage": "The response omits the absence of individual claim data.",
+        "appropriate_abstention": "This question requires personal records that were not provided.",
+        "citation_support": "The definition does not establish which status applies to this claim."
+      },
+      "defect_labels": ["unsupported_personal_claim"]
+    },
+    {
+      "example_id": "insufficient-support",
+      "case_id": "case-18",
+      "response": {
+        "outcome": "answer",
+        "text": "The dental annual maximum is separate from the medical deductible.",
+        "citations": ["medical-limits"],
+        "evidence": [{"document_id": "medical-limits", "quote": "The individual annual in-network out-of-pocket limit is $4,500."}]
+      },
+      "expected_rules": [],
+      "scores": {"answer_correctness": 2, "groundedness": 2, "necessary_fact_coverage": 2, "appropriate_abstention": 2, "citation_support": 0},
+      "justifications": {
+        "answer_correctness": "The distinction is factually correct.",
+        "groundedness": "The supplied current context supports the distinction elsewhere.",
+        "necessary_fact_coverage": "The necessary distinction is stated.",
+        "appropriate_abstention": "The question can be answered from current context.",
+        "citation_support": "The selected quote only states an out-of-pocket amount, not the claimed distinction."
+      },
+      "defect_labels": ["missing_evidence"]
+    },
+    {
+      "example_id": "correct-abstention",
+      "case_id": "case-22",
+      "response": {
+        "outcome": "abstain",
+        "text": "The supplied documents define claim statuses but contain no record of your claim or payment. I cannot determine whether it has been paid.",
+        "citations": [], "evidence": []
+      },
+      "expected_rules": [],
+      "scores": {"answer_correctness": 2, "groundedness": 2, "necessary_fact_coverage": 2, "appropriate_abstention": 2, "citation_support": null},
+      "justifications": {
+        "answer_correctness": "The response accurately identifies unavailable personal information.",
+        "groundedness": "It makes no unsupported assertion about the individual's payment.",
+        "necessary_fact_coverage": "It explains why general definitions cannot establish personal status.",
+        "appropriate_abstention": "Missing personal records justify abstention.",
+        "citation_support": "Not applicable: abstention supplies no factual answer requiring cited evidence."
+      },
+      "defect_labels": []
+    },
+    {
+      "example_id": "fully-supported-answer",
+      "case_id": "case-18",
+      "response": {
+        "outcome": "answer",
+        "text": "The dental annual maximum is separate from the medical deductible. Dental pays up to $1,500 per covered person per calendar year; medical has a $1,500 individual annual in-network deductible.",
+        "citations": ["dental-limits", "medical-limits"],
+        "evidence": [
+          {"document_id": "dental-limits", "quote": "The dental annual maximum is separate from the medical deductible and medical out-of-pocket limit."},
+          {"document_id": "dental-limits", "quote": "The dental plan pays up to $1,500 per covered person per calendar year."},
+          {"document_id": "medical-limits", "quote": "The medical plan has a $1,500 individual annual deductible for in-network care."}
+        ]
+      },
+      "expected_rules": [],
+      "scores": {"answer_correctness": 2, "groundedness": 2, "necessary_fact_coverage": 2, "appropriate_abstention": 2, "citation_support": 2},
+      "justifications": {
+        "answer_correctness": "It correctly distinguishes the rules despite their shared amount.",
+        "groundedness": "Every material assertion is supported by the current supplied sources.",
+        "necessary_fact_coverage": "It includes the distinction and relevant amounts and units.",
+        "appropriate_abstention": "The sources support an informative answer.",
+        "citation_support": "Each source necessary for the comparison is cited and quoted exactly."
+      },
+      "defect_labels": []
+    },
+    {
+      "example_id": "incorrect-outcome",
+      "case_id": "case-02",
+      "response": {
+        "outcome": "abstain",
+        "text": "Regular employees scheduled for at least 20 hours per week are eligible for benefits.",
+        "citations": ["eligibility"],
+        "evidence": [{"document_id": "eligibility", "quote": "Regular employees scheduled for at least 20 hours per week are eligible for benefits."}]
+      },
+      "expected_rules": ["abstain_has_citations", "abstain_has_evidence"],
+      "scores": {"answer_correctness": 2, "groundedness": 2, "necessary_fact_coverage": 2, "appropriate_abstention": 0, "citation_support": 2},
+      "justifications": {
+        "answer_correctness": "The text states the correct scheduled-hours boundary.",
+        "groundedness": "The policy supports the stated boundary.",
+        "necessary_fact_coverage": "The requested threshold is supplied.",
+        "appropriate_abstention": "The declared abstention conflicts with the supported informative answer.",
+        "citation_support": "The exact policy quotation supports the factual text."
+      },
+      "defect_labels": ["incorrect_abstention"]
+    },
+    {
+      "example_id": "vague-abstention",
+      "case_id": "case-22",
+      "response": {"outcome": "abstain", "text": "I don't know.", "citations": [], "evidence": []},
+      "expected_rules": [],
+      "scores": {"answer_correctness": 1, "groundedness": 2, "necessary_fact_coverage": 0, "appropriate_abstention": 1, "citation_support": null},
+      "justifications": {
+        "answer_correctness": "It avoids a false personal claim but explains nothing.",
+        "groundedness": "No unsupported personal status is asserted.",
+        "necessary_fact_coverage": "The absence of personal claim records is not explained.",
+        "appropriate_abstention": "Abstention is justified but the explanation is inadequate.",
+        "citation_support": "Not applicable to this refusal without a factual answer."
+      },
+      "defect_labels": ["inadequate_abstention_explanation"]
+    }
+  ]
+}

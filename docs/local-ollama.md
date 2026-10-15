@@ -1,9 +1,12 @@
 # Local RAG evaluation with Ollama
 
 The optional `live --provider ollama` path uses the native local API and the existing
-BM25 retrieval, `exclude_archived_v1` context policy, `benefits_rag_v1` prompt, strict
+BM25 retrieval, `exclude_archived_v1` context policy, selectable immutable prompts, strict
 response schema, deterministic metrics and v2 offline replay. It requires no OpenAI SDK,
 `OPENAI_API_KEY`, Ollama account or paid API. The default `live` provider remains OpenAI.
+The prompt defaults to unchanged `benefits_rag_v1`; select `benefits_rag_v2` with
+`--prompt-version benefits_rag_v2`. See the [four-case A/B procedure](prompt-consistency.md)
+for the controlled consistency experiment and offline comparison.
 
 ## Apple Silicon setup
 
@@ -69,7 +72,7 @@ installed model metadata and reject remote/cloud-backed aliases. Cloud IDs, URL/
 IDs and unverifiable model weights fail visibly. Missing models require manual installation;
 there is no `/api/pull`, cloud fallback or call to the OpenAI provider.
 
-The [native chat request](https://docs.ollama.com/api/chat) sends the unchanged prompt
+The [native chat request](https://docs.ollama.com/api/chat) sends the selected prompt's exact
 instructions as a system message and the exact question/retrieved context as a user message.
 It passes the existing JSON schema directly in `format`, with `stream: false`. The same
 strict parser validates the resulting `message.content`; malformed output is captured,
