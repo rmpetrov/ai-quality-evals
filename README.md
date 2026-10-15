@@ -81,10 +81,13 @@ documents and question text, never relevant IDs, reference facts, gold evidence,
 | `src/ai_quality_evals/metrics.py` | Independent evaluators, aggregation, and thresholds |
 | `src/ai_quality_evals/runner.py` | Orchestration, input hashes, atomic reports |
 | `src/ai_quality_evals/cli.py` | Offline commands and guarded `live` command |
-| `src/ai_quality_evals/prompt.py` | One versioned prompt, strict response schema, archived exclusion |
+| `src/ai_quality_evals/prompt.py` | Immutable v1/v2 prompts, strict response schema, archived exclusion |
 | `src/ai_quality_evals/provider.py` | Typed provider interface and lazy official OpenAI SDK adapter |
 | `src/ai_quality_evals/capture.py` | Strict v2 trace validation and provenance verification |
 | `src/ai_quality_evals/live.py` | Bounded sequential RAG requests and durable per-request captures |
+| `src/ai_quality_evals/consistency.py` | Separate deterministic response-field findings |
+| `src/ai_quality_evals/review.py` | Strict human annotations and semantic review summaries |
+| `src/ai_quality_evals/review_cli.py` | Offline preparation, validation and paired review comparison |
 | `tests/fixtures/captured-format.jsonl` | Simulated v2 records; never live benchmark data |
 | `src/ai_quality_evals/data/kb/` | 12 current and two archived policies |
 | `src/ai_quality_evals/data/cases.jsonl` | Human-authored cases, labels, and evidence |
@@ -362,7 +365,11 @@ simulated v2 fixtures are intentionally versioned. See the
 ## Explicit live generation and offline replay
 
 For local inference on an Apple Silicon Mac, see the
-[Ollama setup and qwen2.5:3b example](docs/local-ollama.md). After manually installing the
+[Ollama setup and qwen2.5:3b example](docs/local-ollama.md) and the
+[controlled four-case prompt A/B procedure](docs/prompt-consistency.md).
+The original `benefits_rag_v1` prompt remains the default; v2 requires explicit
+`--prompt-version benefits_rag_v2`. Captures from either prompt replay without inference.
+After manually installing the
 model and starting Ollama with cloud disabled, use:
 
 ```bash
@@ -446,3 +453,11 @@ and [Phase 2 verification report](docs/phase2-report.md) describe provenance, me
 limitations, and verification status. Human scores remain null until supplied by a reviewer.
 A substantively wrong answer can pass every structural check; passing gates is not proof
 of correctness or hallucination-free generation.
+
+Phase 3 adds [offline semantic evaluation](docs/semantic-evaluation.md): `ai-evals review
+prepare`, `review validate` and `review summarize` keep consistency findings and explicit
+human ratings separate from existing automatic reports and gates. Review annotations and
+semantic reports stay private under Git-ignored `human-reviews/` or `live-captures/`.
+
+The [completed local prompt A/B findings](docs/prompt-ab-findings.md) compare automatic
+answerability with paired human review and explain the decision to keep v1 as the default.

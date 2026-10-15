@@ -22,10 +22,9 @@ from ai_quality_evals.models import (
     TokenUsage,
 )
 from ai_quality_evals.prompt import (
-    INSTRUCTIONS,
-    PROMPT_VERSION,
     build_context,
     canonical_json,
+    instructions_for,
     prompt_hash,
     response_schema,
     validate_settings,
@@ -238,7 +237,11 @@ def parse_capture(
     )
     if prompt.sha256 != prompt_hash(version, instructions, schema):
         raise ValidationError("prompt hash mismatch")
-    if version != PROMPT_VERSION or instructions != INSTRUCTIONS or schema != response_schema():
+    try:
+        expected_instructions = instructions_for(version)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+    if instructions != expected_instructions or schema != response_schema():
         raise ValidationError("unsupported prompt version, instructions or response schema")
     expected_input = canonical_json(
         {"question": question, "documents": [asdict(doc) for doc in context.documents]}

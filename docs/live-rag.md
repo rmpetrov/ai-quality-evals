@@ -20,10 +20,20 @@ and intent annotations and assert that the complete provider request stays ident
 
 ## Prompt and archived context policy
 
-`benefits_rag_v1` is defined in `prompt.py`. Its SHA-256 covers the version, exact general
-instructions and strict JSON schema using canonical JSON. Each trace also stores the exact
-serialized user input, so question/context can be verified independently of that template
-hash. There are no prompt variants or reference-answer injections.
+`prompt.py` defines two immutable templates. `benefits_rag_v1` remains the default, with
+its original instructions and hash unchanged. Select `benefits_rag_v2` explicitly with
+`live --prompt-version benefits_rag_v2`. V2 clarifies the answer/abstain decision, requires
+citations and exact quotes for every material claim and each necessary document, and asks
+the model to check consistency across all four response fields. Neither template embeds
+reference answers, case IDs or gold labels.
+
+Each template's SHA-256 covers its version, exact instructions and the unchanged strict
+JSON schema using canonical JSON. Each trace also stores the exact serialized user input,
+so question/context can be verified independently of that template hash. Replay validates
+the template recorded in each capture; it does not select a new prompt or regenerate an
+answer. Unknown versions and modified templates are rejected, even with a recomputed hash.
+Capture schema version 2 is separate from prompt versions v1/v2. See the
+[controlled prompt A/B procedure](prompt-consistency.md).
 
 The prompt requires current-document-only guidance, abstention for insufficient context,
 source IDs and exact supporting quotes, and no unsupported personal eligibility decisions.

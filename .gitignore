@@ -16,3 +16,6 @@ reports/
 
 # Private actual provider captures and their reports; never publish through CI.
 live-captures/
+
+# Reviewer identities, annotations and semantic reports stay private.
+human-reviews/

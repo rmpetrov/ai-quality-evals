@@ -18,7 +18,13 @@ from ai_quality_evals.models import (
     GenerationSettings,
     ProviderError,
 )
-from ai_quality_evals.prompt import build_context, build_prompt, validate_settings
+from ai_quality_evals.prompt import (
+    PROMPT_VERSION,
+    build_context,
+    build_prompt,
+    instructions_for,
+    validate_settings,
+)
 from ai_quality_evals.provider import Provider
 from ai_quality_evals.retrieval import BM25Retriever
 from ai_quality_evals.runner import DEFAULT_DATA
@@ -63,10 +69,12 @@ def run_live_batch(
     case_ids: Sequence[str] = (),
     max_cases: int = 3,
     top_k: int = 3,
+    prompt_version: str = PROMPT_VERSION,
 ) -> tuple[CapturedRecord, ...]:
     if not allow_live:
         raise ValueError("live execution requires explicit --allow-live opt-in")
     validate_settings(settings)
+    instructions_for(prompt_version)  # Reject unknown versions before creating files or requests.
     if type(top_k) is not int or top_k < 1:
         raise ValueError("top_k must be a positive integer")
     if not provider.is_simulated:
@@ -84,7 +92,7 @@ def run_live_batch(
     for case in selected:
         retrieval = retriever.retrieve(case.question, top_k=top_k)
         context = build_context(retrieval, documents)
-        prompt = build_prompt(case.question, context)
+        prompt = build_prompt(case.question, context, prompt_version=prompt_version)
         generation = provider.generate(GenerationRequest(settings, prompt))
         response = None
         if generation.status == "completed":

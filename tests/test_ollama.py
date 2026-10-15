@@ -397,10 +397,12 @@ def test_v2_provenance_usage_and_deterministic_replay(
         assert parse_capture(raw).provider == "openai"
 
 
+@pytest.mark.parametrize("prompt_version", ["benefits_rag_v1", "benefits_rag_v2"])
 def test_local_cli_without_key_captures_and_reports_native_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    prompt_version: str,
 ) -> None:
     # Exercise production provenance through a fake HTTP connection, never a real socket.
     http = FakeHTTP([http_response(LOCAL_INFO), http_response(chat_payload())])
@@ -415,6 +417,8 @@ def test_local_cli_without_key_captures_and_reports_native_provenance(
                 "--allow-live",
                 "--model",
                 MODEL,
+                "--prompt-version",
+                prompt_version,
                 "--case",
                 "case-02",
                 "--max-cases",
@@ -435,6 +439,13 @@ def test_local_cli_without_key_captures_and_reports_native_provenance(
     report = json.loads((path.parent / "report.json").read_text())
     assert report["response_origin"] == "live_capture"
     assert report["captures"][0]["provider"] == "ollama"
+    assert report["captures"][0]["prompt"]["version"] == prompt_version
+    sent = http.connections[-1].sent
+    assert sent is not None
+    assert (
+        json.loads(sent[2])["messages"][0]["content"]
+        == (report["captures"][0]["prompt"]["instructions"])
+    )
     assert report["captures"][0]["settings"]["max_retries"] == 0
     output = capsys.readouterr()
     assert "no cloud fallback" in output.out and output.err == ""
